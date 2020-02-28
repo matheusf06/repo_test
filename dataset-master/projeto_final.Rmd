@@ -1,0 +1,133 @@
+---
+title: "Untitled"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r}
+library(tidyverse)
+library(tidytext)
+library(caret)
+```
+
+```{r}
+tweets_positivos <- read.csv('positivos.csv', sep = ";", fileEncoding = "utf-8") %>%
+  mutate(id = as.numeric(id))
+tweets_positivos <- tweets_positivos[sample(nrow(tweets_positivos), 8000), ]
+
+tweets_negativos <- read.csv('negativos2.csv') %>%
+  mutate(id = as.numeric(id) + 8000)
+tweets_negativos <- tweets_negativos[sample(nrow(tweets_negativos), 8000), ]
+
+tweets <- rbind(tweets_positivos, tweets_negativos)
+```
+
+```{r}
+tweets %>%
+  ggplot(aes(sentiment)) +
+  geom_bar()
+```
+
+```{r}
+tweets_clean <- tweets %>%
+  mutate(id = as.numeric(id),
+    text = str_replace_all(text, " ?(f|ht)tp(s?)://(.*)[.][a-z]+/[A-Za-z0-9.-]+\\b", " URL")) %>%
+  mutate(text = str_replace_all(text, "@\\w+", "USER")) %>%
+  mutate(text = str_replace_all(text, "[)(:)#]", "")) %>%
+  filter(!is.na(id))
+```
+
+```{r}
+tweets_clean %>%
+  ggplot(aes(sentiment)) +
+  geom_bar()
+```
+
+
+```{r}
+data_counts <- map_df(1:2,
+                      ~ unnest_tokens(tweets_clean, word, text, 
+                                      token = "ngrams", n = .x)) %>%
+  anti_join(stop_words, by = "word") %>%
+  count(id, word, sort = TRUE)
+```
+
+
+### Considera apenas palavras que aparecem em mais de 10 tweets
+```{r}
+words_10 <- data_counts %>%
+  group_by(word) %>%
+  summarise(n = n()) %>% 
+  filter(n >= 10) %>%
+  select(word)
+```
+
+```{r}
+data_dtm <- data_counts %>%
+  right_join(words_10, by = "word") %>%
+  bind_tf_idf(word, id, n) %>%
+  cast_dtm(id, word, tf_idf)
+```
+
+```{r}
+meta <- tibble(id = as.numeric(dimnames(data_dtm)[[1]])) %>%
+  left_join(tweets_clean[!duplicated(tweets_clean$id), ], by = "id") %>%
+  filter(!is.na(sentiment))
+```
+
+```{r}
+set.seed(1234)
+trainIndex <- createDataPartition(meta$sentiment, p = 0.8, list = FALSE, times = 1)
+```
+
+
+```{r}
+data_df_train <- data_dtm[trainIndex, ] %>% as.matrix() %>% as.data.frame()
+data_df_test <- data_dtm[-trainIndex, ] %>% as.matrix() %>% as.data.frame()
+
+response_train <- meta$sentiment[trainIndex]
+```
+
+```{r}
+tweets_clean %>%
+  anti_join(meta, by = "id") %>%
+  head(25) %>%
+  pull(text)
+```
+
+```{r}
+trctrl <- trainControl(method = "none")
+
+nb_mod <- train(x = data_df_train,
+                y = as.factor(response_train),
+                method = "naive_bayes",
+                trControl = trctrl,
+                tuneGrid = data.frame(laplace = 0,
+                                      usekernel = FALSE,
+                                      adjust = FALSE))
+```
+
+```{r}
+nb_pred <- predict(nb_mod,
+                   newdata = data_df_test)
+```
+
+```{r}
+nb_cm <- confusionMatrix(nb_pred, meta[-trainIndex, ]$disaster)
+nb_cm
+```
+
+
+
+
+
+
+
+
+
+
+
+
